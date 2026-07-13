@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(command -v python python3 py node npx)",
+      "PowerShell(node --version)",
+      "PowerShell(pnpm --version)",
+      "PowerShell(docker --version)",
+      "PowerShell(pnpm install 2>&1)",
+      "PowerShell(pnpm --filter @iah/api typecheck 2>&1)",
+      "PowerShell(pnpm --filter @iah/shared typecheck 2>&1)",
+      "PowerShell(pnpm --filter @iah/web build 2>&1)",
+      "PowerShell($env:NEXT_STANDALONE='0'; pnpm --filter @iah/web build 2>&1 | Select-Object -Last 25)",
+      "PowerShell(powershell -ExecutionPolicy Bypass -File \"C:\\\\Users\\\\almir\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\D--Aplicativos-iahumanizadabase\\\\551ebb1a-453d-4330-90e0-788135bfcb09\\\\scratchpad\\\\smoke-test.ps1\")",
+      "PowerShell(pnpm --filter @iah/shared build 2>&1 | Select-Object -Last 4; pnpm --filter @iah/api build 2>&1 | Select-Object -Last 4; powershell -ExecutionPolicy Bypass -File \"C:\\\\Users\\\\almir\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\D--Aplicativos-iahumanizadabase\\\\551ebb1a-453d-4330-90e0-788135bfcb09\\\\scratchpad\\\\smoke-test.ps1\")",
+      "PowerShell($env:NEXT_STANDALONE='0'; pnpm typecheck 2>&1 | Select-Object -Last 12; pnpm --filter @iah/web build 2>&1 | Select-Object -Last 6)",
+      "PowerShell(cd apps\\\\api; npx prisma migrate diff --from-empty --to-schema-datamodel prisma\\\\schema.prisma --script > prisma\\\\init.sql 2>$null; \\(Get-Content prisma\\\\init.sql | Measure-Object -Line\\).Lines)",
+      "PowerShell(Remove-Item -Recurse -Force D:\\\\Aplicativos\\\\iahumanizadabase\\\\apps\\\\api\\\\migrations -ErrorAction SilentlyContinue; $p=\"D:\\\\Aplicativos\\\\iahumanizadabase\\\\apps\\\\api\\\\prisma\"; New-Item -ItemType Directory -Force \"$p\\\\migrations\\\\20260712000000_init\" | Out-Null; Get-Content \"$p\\\\init.sql\" | Set-Content -Encoding utf8 \"$p\\\\migrations\\\\20260712000000_init\\\\migration.sql\"; Remove-Item \"$p\\\\init.sql\"; Set-Content -Encoding utf8 \"$p\\\\migrations\\\\migration_lock.toml\" \"provider = `\"postgresql`\"\"; Get-Content \"$p\\\\migrations\\\\20260712000000_init\\\\migration.sql\" -TotalCount 4)",
+      "PowerShell($p=\"D:\\\\Aplicativos\\\\iahumanizadabase\\\\apps\\\\api\"; cd $p; npx prisma migrate diff --from-empty --to-schema-datamodel prisma\\\\schema.prisma --script > prisma\\\\init.sql 2>$null; Get-Content prisma\\\\init.sql | Set-Content -Encoding utf8 prisma\\\\migrations\\\\20260712000000_init\\\\migration.sql; Remove-Item prisma\\\\init.sql; \\(Get-Content prisma\\\\migrations\\\\20260712000000_init\\\\migration.sql | Measure-Object -Line\\).Lines)",
+      "PowerShell(cd D:\\\\Aplicativos\\\\iahumanizadabase; pnpm --filter @iah/api build 2>&1 | Select-Object -Last 3; $env:NEXT_STANDALONE='0'; pnpm --filter @iah/web build 2>&1 | Select-Object -Last 8)"
+    ]
+  }
+}

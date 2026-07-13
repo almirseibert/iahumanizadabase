@@ -1,0 +1,591 @@
+// IA Humanizada — schema multi-tenant
+// Toda tabela de dados de negócio carrega tenantId com índice.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================== Tenant ==============================
+
+enum Segment {
+  PADARIA
+  LAVANDERIA
+  SALAO
+  CLINICA
+  LAVAJATO
+  OUTRO
+}
+
+enum TenantStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+model Tenant {
+  id                  String       @id @default(cuid())
+  name                String
+  slug                String       @unique
+  segment             Segment      @default(OUTRO)
+  status              TenantStatus @default(ACTIVE)
+  timezone            String       @default("America/Sao_Paulo")
+  /// Texto livre sobre o negócio — a IA usa via consultar_informacoes_negocio
+  description         String?
+  address             String?
+  /// Telefone exibido para clientes (não é o phone_number_id)
+  phoneDisplay        String?
+  /// { seg: [{inicio,fim}], ... }
+  businessHours       Json?
+  // --- WhatsApp Cloud API (por tenant) ---
+  waPhoneNumberId     String?      @unique
+  waBusinessAccountId String?
+  /// Token de acesso criptografado (AES-256-GCM)
+  waAccessTokenEnc    String?
+  /// WhatsApp do dono do negócio (E.164 sem +) — recebe relatório semanal e alertas
+  ownerWaId           String?
+  /// Fidelidade: pontos ganhos por real pago (0 = desativado)
+  loyaltyPointsPerReal Float       @default(0)
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  aiConfig            AiConfig?
+  contacts            Contact[]
+  conversations       Conversation[]
+  messages            Message[]
+  catalogItems        CatalogItem[]
+  appointments        Appointment[]
+  orders              Order[]
+  payments            Payment[]
+  users               User[]
+  calendarIntegration CalendarIntegration?
+  externalConnectors  ExternalConnector[]
+  paymentIntegration  PaymentIntegration?
+  metrics             MetricDaily[]
+  waTemplates         WaTemplate[]
+  campaigns           Campaign[]
+  knowledgeChunks     KnowledgeChunk[]
+  npsResponses        NpsResponse[]
+  loyaltyAccounts     LoyaltyAccount[]
+  weeklyReports       WeeklyReport[]
+}
+
+// ============================== IA ==============================
+
+enum AiProviderName {
+  ANTHROPIC
+  OPENAI
+  GEMINI
+}
+
+model AiConfig {
+  id                 String         @id @default(cuid())
+  tenantId           String         @unique
+  tenant             Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  provider           AiProviderName @default(ANTHROPIC)
+  model              String         @default("claude-haiku-4-5-20251001")
+  /// Chave própria do tenant, criptografada; null = usa a chave global do .env
+  apiKeyEnc          String?
+  /// Persona humanizada em PT-BR
+  systemPrompt       String         @default("")
+  temperature        Float          @default(0.7)
+  maxTokens          Int            @default(1024)
+  /// Nomes das tools habilitadas (ver AVAILABLE_TOOLS no @iah/shared)
+  enabledTools       String[]       @default(["consultar_informacoes_negocio", "consultar_catalogo", "escalar_para_humano"])
+  greetingMessage    String?
+  /// Mensagem enviada ao cliente quando escala para humano
+  escalationMessage  String?
+  maxHistoryMessages Int            @default(30)
+  /// Orçamento diário de tokens (in+out) — null = ilimitado. Protege contra custo descontrolado.
+  dailyTokenBudget   Int?
+  /// Envia pesquisa NPS (0-10) quando a conversa é resolvida
+  npsEnabled         Boolean        @default(false)
+  updatedAt          DateTime       @updatedAt
+}
+
+// ============================== Contatos e conversas ==============================
+
+model Contact {
+  id                String   @id @default(cuid())
+  tenantId          String
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// Telefone no formato E.164 sem "+" (wa_id da Meta)
+  waId              String
+  name              String?
+  /// Nome do perfil WhatsApp (vem no webhook)
+  profileName       String?
+  tags              String[] @default([])
+  /// LGPD — cliente pediu para parar de receber mensagens
+  optOut            Boolean  @default(false)
+  lastInteractionAt DateTime?
+  createdAt         DateTime @default(now())
+
+  conversations Conversation[]
+  appointments  Appointment[]
+  orders        Order[]
+  payments      Payment[]
+
+  @@unique([tenantId, waId])
+  @@index([tenantId])
+}
+
+enum ConversationStatus {
+  OPEN
+  WAITING
+  RESOLVED
+}
+
+enum ConversationMode {
+  BOT
+  HUMAN
+}
+
+/// Canal da conversa — Instagram DM usa a mesma Graph API (expansão futura)
+enum Channel {
+  WHATSAPP
+  INSTAGRAM
+}
+
+model Conversation {
+  id                    String             @id @default(cuid())
+  tenantId              String
+  tenant                Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contactId             String
+  contact               Contact            @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  status                ConversationStatus @default(OPEN)
+  /// BOT = IA responde; HUMAN = takeover (IA pausada)
+  mode                  ConversationMode   @default(BOT)
+  assignedUserId        String?
+  /// Base da janela de 24h da Cloud API
+  lastCustomerMessageAt DateTime?
+  unreadCount           Int                @default(0)
+  /// Resumo comprimido do histórico antigo (memória)
+  summary               String?
+  /// Quantas mensagens já estavam cobertas pelo summary (controle de re-sumarização)
+  summaryMessageCount   Int                @default(0)
+  channel               Channel            @default(WHATSAPP)
+  /// Aguardando resposta da pesquisa NPS desde
+  npsPendingAt          DateTime?
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+
+  messages Message[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, updatedAt])
+}
+
+enum MessageDirection {
+  IN
+  OUT
+}
+
+enum AuthorType {
+  CUSTOMER
+  BOT
+  AGENT
+  SYSTEM
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  AUDIO
+  VIDEO
+  DOCUMENT
+  STICKER
+  LOCATION
+  INTERACTIVE
+  TEMPLATE
+  UNKNOWN
+}
+
+enum MessageStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+model Message {
+  id             String           @id @default(cuid())
+  tenantId       String
+  tenant         Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversationId String
+  conversation   Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  direction      MessageDirection
+  authorType     AuthorType
+  /// wamid da Meta — dedup de webhook e correlação de status
+  waMessageId    String?          @unique
+  type           MessageType      @default(TEXT)
+  /// Payload bruto (interactive, location etc.)
+  content        Json?
+  text           String?
+  mediaUrl       String?
+  status         MessageStatus    @default(QUEUED)
+  errorCode      String?
+  /// Se a IA respondeu, quantas iterações de tools usou
+  aiIterations   Int?
+  createdAt      DateTime         @default(now())
+
+  @@index([conversationId, createdAt])
+  @@index([tenantId, createdAt])
+}
+
+// ============================== Catálogo ==============================
+
+model CatalogItem {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  category    String
+  name        String
+  description String?
+  priceCents  Int
+  /// Duração em minutos (serviços agendáveis: corte, consulta, lavagem...)
+  durationMin Int?
+  imageUrl    String?
+  active      Boolean  @default(true)
+  /// Id no sistema externo do cliente (ERP), para sincronização
+  externalId  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  appointments Appointment[]
+
+  @@index([tenantId, active])
+}
+
+// ============================== Agendamentos ==============================
+
+enum AppointmentStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  DONE
+  NO_SHOW
+}
+
+model Appointment {
+  id             String            @id @default(cuid())
+  tenantId       String
+  tenant         Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contactId      String
+  contact        Contact           @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  conversationId String?
+  catalogItemId  String?
+  catalogItem    CatalogItem?      @relation(fields: [catalogItemId], references: [id], onDelete: SetNull)
+  startsAt       DateTime
+  endsAt         DateTime
+  status         AppointmentStatus @default(PENDING)
+  googleEventId  String?
+  notes          String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  payments Payment[]
+
+  @@index([tenantId, startsAt])
+}
+
+// ============================== Pedidos e pagamentos ==============================
+
+enum OrderStatus {
+  DRAFT
+  AWAITING_PAYMENT
+  PAID
+  CANCELLED
+  FULFILLED
+}
+
+model Order {
+  id         String      @id @default(cuid())
+  tenantId   String
+  tenant     Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contactId  String
+  contact    Contact     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  /// [{ name, qty, priceCents, catalogItemId? }]
+  items      Json
+  totalCents Int
+  status     OrderStatus @default(DRAFT)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  payments Payment[]
+
+  @@index([tenantId, status])
+}
+
+enum PaymentProviderName {
+  MERCADOPAGO
+}
+
+enum PaymentMethod {
+  PIX
+  PAYMENT_LINK
+}
+
+enum PaymentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+  REFUNDED
+}
+
+model Payment {
+  id             String              @id @default(cuid())
+  tenantId       String
+  tenant         Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  orderId        String?
+  order          Order?              @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  appointmentId  String?
+  appointment    Appointment?        @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  contactId      String
+  contact        Contact             @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  provider       PaymentProviderName @default(MERCADOPAGO)
+  method         PaymentMethod
+  /// Id do pagamento no Mercado Pago
+  mpPaymentId    String?             @unique
+  mpPreferenceId String?
+  amountCents    Int
+  description    String?
+  status         PaymentStatus       @default(PENDING)
+  /// QR code Pix em base64 (imagem)
+  pixQrCode      String?
+  pixCopiaECola  String?
+  paymentUrl     String?
+  paidAt         DateTime?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  @@index([tenantId, status])
+}
+
+/// Credenciais Mercado Pago por tenant
+model PaymentIntegration {
+  id               String   @id @default(cuid())
+  tenantId         String   @unique
+  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// Access token do Mercado Pago, criptografado
+  mpAccessTokenEnc String?
+  active           Boolean  @default(false)
+  updatedAt        DateTime @updatedAt
+}
+
+// ============================== Integrações ==============================
+
+enum CalendarAuthType {
+  OAUTH
+  SERVICE_ACCOUNT
+}
+
+model CalendarIntegration {
+  id                    String           @id @default(cuid())
+  tenantId              String           @unique
+  tenant                Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  type                  CalendarAuthType @default(OAUTH)
+  calendarId            String           @default("primary")
+  refreshTokenEnc       String?
+  serviceAccountJsonEnc String?
+  active                Boolean          @default(false)
+  updatedAt             DateTime         @updatedAt
+}
+
+enum ConnectorType {
+  REST
+}
+
+model ExternalConnector {
+  id        String        @id @default(cuid())
+  tenantId  String
+  tenant    Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String
+  type      ConnectorType @default(REST)
+  /// { baseUrl, headersEnc } — headers com auth criptografados
+  config    Json
+  /// { nome: { method:"GET", path:"/...", description:"...", params:{...} } }
+  endpoints Json
+  active    Boolean       @default(true)
+  createdAt DateTime      @default(now())
+
+  @@index([tenantId])
+}
+
+// ============================== Usuários do dashboard ==============================
+
+enum UserRole {
+  SUPERADMIN
+  ADMIN
+  AGENT
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         UserRole @default(AGENT)
+  /// null = usuário global da plataforma (SUPERADMIN)
+  tenantId     String?
+  tenant       Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+}
+
+// ============================== Infra ==============================
+
+enum WebhookSource {
+  META
+  MERCADOPAGO
+}
+
+/// Idempotência de webhooks
+model WebhookEvent {
+  id          String        @id @default(cuid())
+  source      WebhookSource
+  externalId  String
+  payload     Json
+  processedAt DateTime?
+  createdAt   DateTime      @default(now())
+
+  @@unique([source, externalId])
+}
+
+// ============================== Templates e campanhas ==============================
+
+/// Finalidade do template — o sistema escolhe automaticamente pelo propósito
+enum TemplatePurpose {
+  GENERIC
+  REMINDER
+  REACTIVATION
+  CAMPAIGN
+  REPORT
+}
+
+/// Template aprovado na Meta (único formato permitido fora da janela de 24h)
+model WaTemplate {
+  id         String          @id @default(cuid())
+  tenantId   String
+  tenant     Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// Nome exato do template aprovado no painel da Meta
+  name       String
+  language   String          @default("pt_BR")
+  /// Corpo com {{1}}, {{2}}… — referência para o operador
+  body       String          @default("")
+  paramCount Int             @default(0)
+  purpose    TemplatePurpose @default(GENERIC)
+  /// Status na Meta (APPROVED, PENDING, REJECTED) — via sync
+  metaStatus String?
+  createdAt  DateTime        @default(now())
+
+  campaigns Campaign[]
+
+  @@unique([tenantId, name, language])
+}
+
+enum CampaignStatus {
+  DRAFT
+  SENDING
+  DONE
+  CANCELLED
+}
+
+model Campaign {
+  id           String         @id @default(cuid())
+  tenantId     String
+  tenant       Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name         String
+  templateId   String
+  template     WaTemplate     @relation(fields: [templateId], references: [id])
+  /// Parâmetros fixos do corpo do template (mesmos para todos)
+  bodyParams   String[]       @default([])
+  /// Só contatos com TODAS estas tags (vazio = todos os contatos opt-in)
+  filterTags   String[]       @default([])
+  status       CampaignStatus @default(DRAFT)
+  totalCount   Int            @default(0)
+  sentCount    Int            @default(0)
+  failedCount  Int            @default(0)
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  createdAt    DateTime       @default(now())
+
+  @@index([tenantId, status])
+}
+
+// ============================== Base de conhecimento ==============================
+
+/// Trecho da base de conhecimento do tenant (FAQ, cardápio, procedimentos…)
+/// Busca full-text em português; upgrade futuro: embeddings/pgvector.
+model KnowledgeChunk {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  title     String
+  content   String
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+}
+
+// ============================== NPS e fidelidade ==============================
+
+model NpsResponse {
+  id             String   @id @default(cuid())
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversationId String
+  contactId      String
+  score          Int
+  createdAt      DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+}
+
+model LoyaltyAccount {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contactId String
+  points    Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, contactId])
+}
+
+// ============================== Relatórios ==============================
+
+/// Relatório semanal gerado pela IA para o dono do negócio
+model WeeklyReport {
+  id        String    @id @default(cuid())
+  tenantId  String
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  weekStart DateTime  @db.Date
+  content   String
+  sentAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@unique([tenantId, weekStart])
+}
+
+model MetricDaily {
+  id                    String   @id @default(cuid())
+  tenantId              String
+  tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  date                  DateTime @db.Date
+  conversationsCount    Int      @default(0)
+  messagesIn            Int      @default(0)
+  messagesOut           Int      @default(0)
+  aiCalls               Int      @default(0)
+  tokensIn              Int      @default(0)
+  tokensOut             Int      @default(0)
+  handoffs              Int      @default(0)
+  paymentsApprovedCents Int      @default(0)
+
+  @@unique([tenantId, date])
+}
