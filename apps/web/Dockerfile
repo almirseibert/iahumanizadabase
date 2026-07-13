@@ -18,6 +18,8 @@ ARG NEXT_PUBLIC_API_URL=http://localhost:3001
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 COPY packages ./packages
 COPY apps/web ./apps/web
+# Compila o pacote compartilhado (@iah/shared) para gerar dist antes do next build
+RUN pnpm --filter @iah/shared build
 RUN cd apps/web && pnpm build
 
 FROM node:22-alpine AS runtime
