@@ -17,6 +17,8 @@ RUN pnpm install --frozen-lockfile || pnpm install
 FROM deps AS build
 COPY packages ./packages
 COPY apps/api ./apps/api
+# Compila primeiro o pacote compartilhado (@iah/shared) para gerar dist + tipos
+RUN pnpm --filter @iah/shared build
 RUN cd apps/api && pnpm db:generate && pnpm build
 
 # --- Runtime ---
@@ -27,7 +29,7 @@ ENV NODE_ENV=production
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/apps/api/node_modules ./apps/api/node_modules
-COPY --from=deps /app/packages ./packages
+COPY --from=build /app/packages ./packages
 COPY --from=build /app/apps/api/dist ./apps/api/dist
 COPY --from=build /app/apps/api/prisma ./apps/api/prisma
 COPY --from=build /app/apps/api/node_modules/.prisma ./apps/api/node_modules/.prisma
