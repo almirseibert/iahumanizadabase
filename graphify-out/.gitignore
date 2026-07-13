@@ -1,0 +1,9 @@
+# Estado interno do graphify (específico da máquina / regenerável)
+.graphify_python
+.graphify_root
+.graphify_labels.json
+cache/
+.graphify_*.json
+.needs_update
+
+# Mantém versionado: graph.json, GRAPH_REPORT.md, graph.html, manifest.json, cost.json
